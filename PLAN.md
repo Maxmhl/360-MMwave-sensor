@@ -94,3 +94,58 @@ dafür Interferenzen zwischen Modulen beachten (zeitliches Multiplexing / Kanalw
 - Budget und gewünschte Auflösung/Reichweite?
 - Innen oder Außen? Netzbetrieb oder Akku?
 - Bevorzugte Plattform (ESP32/ESPHome, Raspberry Pi, ROS)?
+
+---
+
+# Konkretisierung: Outdoor + Akku + ESP32
+
+## Empfohlene Architektur
+Alles Rotierende sitzt **in einem geschlossenen, wetterfesten Dom**; außen gibt es nur Gehäuse, Solarpanel und ggf. WiFi-Antenne.
+
+```
+[Solarpanel 6V/2W] -> [CN3791 MPPT-Lader] -> [Akku 18650 (+BMS)] -> [Boost 5V]
+                                                    |-> [Lastschalter] -> Radar (LD2450)
+                                                    |-> ESP32 (Deep Sleep)
+                                                    '-> Motortreiber (Sleep) -> Schrittmotor
+```
+
+### Kein Schleifring nötig (zwei Varianten)
+1. **Sweep ±180° mit Flexkabel:** Sensor dreht hin und her (Kabelschlaufe als Drehentlastung), Elektronik+Akku sitzen fest. Mechanisch am einfachsten und dicht.
+2. **Alles dreht mit:** ESP32, Sensor, Akku auf dem Drehteller (ausgewuchtet), Daten per WiFi/ESP-NOW. Laden nur im Stand per Kontaktpins oder Panel fest + Schleifring nur für Ladeleitung.
+
+Empfehlung: **Variante 1**, ESP32 mit Antenne außerhalb der Drehebene.
+
+## Bauteile (Vorschlag)
+| Funktion | Teil | Hinweis |
+|---|---|---|
+| MCU | ESP32-S3 / ESP32-C3 (u.FL-Antenne) | gutes Deep-Sleep (~10 µA), externe Antenne für Reichweite |
+| Radar | LD2450 (Position X/Y) oder LD2410C | zieht ca. 80–100 mA: **über MOSFET/Load-Switch (z. B. TPS22918) nur während Scan einschalten** |
+| Radar (Low-Power-Alternative) | Acconeer A121 (XM125) | extrem sparsam, aber nur Distanz, kein Tracking |
+| Motor | 28BYJ-48 (gut, Getriebe hält Position stromlos) oder kleiner NEMA17 | Treiber nach Scan in Sleep, keine Haltestrom |
+| Treiber | DRV8833/ULN2003 (28BYJ-48) oder TMC2209 mit EN-Pin | EN/SLEEP per ESP32 |
+| Homing | Hall-Sensor + Magnet (z. B. A3144/DRV5032) | keine mechanischen Schalter außen |
+| Akku | 18650 (2–3 Ah) + Schutzschaltung; bei Frost **LiFePO4** | Li-Ion darf unter 0 °C nicht geladen werden |
+| Laden | Solarpanel 6 V / 2–5 W + CN3791 (MPPT) | Panel schräg nach Süden |
+| Spannung | Boost/Buck auf 5 V (z. B. TPS61023 / MT3608) | LD2450 braucht 5 V |
+
+## Energiebudget (grobe Schätzung, vor dem Bau messen!)
+- Ein Scan mit 12 Positionen à ca. 1,5 s ≈ 20 s Aktivzeit bei ≈ 300 mA (Radar+ESP32+Motor, 5 V).
+- Ergibt ≈ 6 As ≈ 1,7 mAh (5 V) pro Scan.
+  - 1 Scan/min → ca. 2,4 Ah/Tag (5 V) → zu viel für Akku allein.
+  - 1 Scan/10 min → ca. 0,25 Ah/Tag → mit 18650 (≈ 2 Ah nutzbar @5 V) rund 8 Tage, mit Solar dauerhaft.
+- Deep-Sleep-Grundlast ESP32 + Regler: sehr klein, aber Regler-Ruhestrom prüfen.
+- Alternativ **PIR/Bewegungs-Wakeup**: ESP32 schläft, Scan nur bei Ereignis (spart am meisten).
+
+## Outdoor-Besonderheiten
+- **Gehäuse:** IP65/IP66, UV-beständig (ASA statt PLA/PETG), Dichtungen (Silikon/O-Ring), Druckausgleich-Membran (Gore-Vent) gegen Kondenswasser, Trockenmittel.
+- **Radom:** dünnwandig (ca. 1–2 mm, auf Wellenlänge optimiert), kein Metall/Lack mit Metallpigmenten, kein Wassertropfenfilm → leicht schräge/runde Form, damit Wasser abläuft.
+- **Falschalarme:** Regen, Wind in Büschen/Bäumen, Insekten → Clutter-Filter, Mindestenergie-Schwelle, Zonen ausblenden, mehrere Scans mitteln.
+- **Temperatur:** Radar-Genauigkeit und Akku ändern sich bei Kälte/Hitze; dunkles Gehäuse in Sonne vermeiden (Überhitzung).
+- **Konnektivität:** WiFi-Reichweite draußen begrenzt → u.FL-Antenne, ggf. ESP-NOW zu einem Gateway oder LoRa-Modul (sehr sparsam).
+- **Sicherheit:** Nur zugelassene 24-GHz-Module (LD24xx) verwenden, kein Eigenbau der HF-Stufe.
+
+## Konkreter nächster Schritt (Prototyp 1)
+1. ESP32 + LD2450 + 28BYJ-48 auf dem Tisch: Home-Sensor, Step-and-measure (12 Schritte à 30°), Polarplot per MQTT/Serial.
+2. Stromaufnahme in allen Phasen messen (INA219 / Power-Profiler) → Energiebudget verifizieren.
+3. Deep-Sleep + Lastschalter einbauen, Intervall festlegen.
+4. Gehäuse (ASA, Dom) + Solar/Akku, dann Außentest.
